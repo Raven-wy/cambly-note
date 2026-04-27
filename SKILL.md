@@ -167,18 +167,46 @@ claude mcp add puppeteer /path/to/mcp-server-puppeteer --scope user -e PUPPETEER
 9. 整理输出笔记
 ```
 
-#### 批量：获取课程列表
+#### 批量：获取课程列表 + lessonV2Id
 
 ```
 1. mcp__puppeteer__puppeteer_navigate →
    https://www.cambly.com/en/student/progress/past-lessons?lang=zh_CN
 2. 等待 3 秒
-3. mcp__puppeteer__puppeteer_evaluate → 执行【列表抓取脚本】
-4. 读取 window.__camblyLessonList（注意：列表卡片不显示时长，duration 字段通常为 null）
-   → 取最新 N 条作为待处理列表，时长过滤在详情页做
-5. 依次执行单节课流程；从详情页 feedbackText 提取 duration 后再判断是否跳过
+3. mcp__puppeteer__puppeteer_evaluate → 执行【React fiber lessonV2Id 提取脚本】
+   （比列表抓取脚本更可靠，不依赖 window.open 拦截）
+4. 得到 ID 列表后依次 navigate 到详情页处理
+5. 时长过滤在详情页 feedbackText 里做（列表页 duration 通常为 null）
 6. 每处理 5 节输出一次笔记
 ```
+
+**React fiber lessonV2Id 提取脚本（已验证有效）：**
+
+```js
+(() => {
+  const cards = Array.from(document.querySelectorAll('div[role="button"][tabindex="0"]'))
+    .filter(c => /202\d/.test(c.innerText || ''));
+  const results = [];
+  cards.forEach(card => {
+    const fk = Object.keys(card).find(k => k.startsWith('__reactFiber'));
+    if (!fk) return;
+    let node = card[fk];
+    for (let i = 0; i < 50; i++) {
+      if (!node) break;
+      if (node.memoizedProps) {
+        const m = JSON.stringify(node.memoizedProps).match(/"lessonV2Id":"([^"]+)"/);
+        if (m) { results.push({ lessonV2Id: m[1], preview: (card.innerText || '').slice(0, 80) }); break; }
+      }
+      node = node.return;
+    }
+  });
+  window.__lessonIds = results;
+  return JSON.stringify(results);
+})()
+```
+
+返回格式：`[{ lessonV2Id: "xxx", preview: "Adam Hubb | 2026-04-27..." }, ...]`
+第一个元素即最新一节课。
 
 ---
 
@@ -537,7 +565,7 @@ copy(document.body.innerText)
 | AI 反馈懒加载，初始显示"正在准备" | 在反馈 tab 等待 10 秒，同时滚动右侧面板触发加载 |
 | 两个 tab 的数据各自独立，一次拿不全 | 切两次 tab，各拿一次 `document.body.innerText` |
 | 某些课程转录显示"正在准备" | 标记 ⚠️ 跳过转录板块，其他板块正常输出 |
-| 模式 A Puppeteer 首次无 Cambly session | `PUPPETEER_HEADLESS=false` 后在弹出窗口手动登录一次，session 持久化 |
+| 模式 A Puppeteer 每次重启后无登录态 | session **不会跨重启持久化**；每次新启动 Puppeteer 都需在弹出窗口登录一次，当次 session 内正常使用 |
 | 模式 A 工具名带命名空间前缀 | 使用完整名称：`mcp__puppeteer__puppeteer_navigate` 等 |
 | 模式 A MCP 未加载（工具不在列表里） | 用 `claude mcp add --scope user` 注册到 `~/.claude.json`，不是 `~/.claude/settings.json` |
 | 模式 B 坐标偏移 | 先截图确认坐标，基准 `(1109, 45)` 按实际分辨率比例换算 |
@@ -559,24 +587,41 @@ copy(document.body.innerText)
 1. [话题 1]
 2. [话题 2]
 
-### {语法纠正}
-| {你说的} | {正确表达} | {知识点} |
-|--------|---------|--------|
-（来源：AI 卡片 + 转录中老师口头纠正）
+### {AI 纠错卡片}
+| # | 你说的 | 正确表达 | 知识点 |
+|---|-------|---------|-------|
+| 1 | ... | ... | ... |
+| ✓ | — | {老师或 AI 给出的正面肯定} | {原文评语} |
+
+（来源：AI 卡片每一条 ✅ + 转录中老师口头纠正；✓ 行填正面反馈）
 
 ### [专题教学板块 — 根据课程实际内容动态命名]
 
+### 🔍 {核心词汇深挖}（针对课上重点讲解的词）
+
+每个深挖词独立小节：
+- **标题**：词汇 — 一句话说明为何值得深挖（多义/英美差异/易混/衍生词）
+- **表格**：多维拆解（含义/词性/地区差异/反义/搭配/同义扩展）
+- **⚠️ 提示**：使用陷阱或记忆锚点（blockquote 格式）
+
 ### 🗣️ {老师的地道表达}
-- "原句" — {解释为什么这个表达好/地道/值得模仿}
+
+3 列表格，每条附完整原句、具体触发场景、为什么地道：
+
+| 表达 | 使用场景 | 为什么地道 |
+|-----|---------|----------|
+| "完整原句" | 课上具体触发场景 | 比普通说法好在哪、语用特点、可复用套路 |
 
 ### {实用词汇/短语}
 | {词汇/短语} | {含义} | {语境} |
 |----------|------|------|
 
 ### {外教反馈}（如有书面反馈）
-- ✅ {做得好}：...
-- ⚠️ {需改进}：...
-- 💡 {练习建议}：...
+| 维度 | 反馈 |
+|-----|-----|
+| **优势** | ... |
+| **待改进** | ... |
+| **练习方法** | ... |
 ```
 
 ---
@@ -595,6 +640,7 @@ copy(document.body.innerText)
 | 面试 / 场景模拟 | 模拟对话练习 | 问题 + 回答框架 + 关键句型 |
 | Phrasal Verbs | 老师教短语动词 | 词组 · 含义 · 讲解要点 · 例句 |
 | 方向指引 | 描述路线/位置 | 句式 · 含义 · 用法说明 |
+| 核心词汇深挖 | 老师对某词重点展开（多义/英美差异/易混/衍生） | 独立小节：含义表 + ⚠️ 提示 + 同义扩展，见"核心词汇深挖"格式 |
 
 **严格执行：老师举了几个例子就列几个，不省略，不自行补充。一节课可同时有多个专题板块。**
 
